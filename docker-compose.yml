@@ -1,0 +1,37 @@
+version: '3.8'
+
+services:
+
+  jenkins:
+    image: jenkins/jenkins:lts-jdk11
+    container_name: jenkins
+    restart: unless-stopped
+    privileged: true
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - qa-net
+
+  allure:
+    image: frankescobar/allure-docker-service:latest
+    container_name: allure
+    restart: unless-stopped
+    ports:
+      - "5050:5050"
+    volumes:
+      - allure_results:/app/allure-results
+    networks:
+      - qa-net
+
+volumes:
+  jenkins_home:
+  allure_results:
+
+networks:
+  qa-net:
+    driver: bridge

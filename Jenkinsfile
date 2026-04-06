@@ -47,55 +47,33 @@ pipeline {
             }
         }
 
-        stage('Install Allure CLI') {
-            agent any
-            steps {
-                script {
-                    if (isUnix()) {
-                        sh '''
-                        if ! command -v allure &> /dev/null; then
-                            echo "Installing Allure CLI..."
-                            wget https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz
-                            tar -xzf allure-2.27.0.tgz
-                            mv allure-2.27.0 /opt/allure
-                            export PATH=/opt/allure/bin:$PATH
-                        fi
-                        '''
-                    } else {
-                        echo "Please install Allure CLI manually on Windows nodes"
-                    }
-                }
-            }
-        }
-
         stage('Test') {
             agent any
             steps {
                 script {
-                    def mvnHome = tool name: 'maven3', type: 'maven'
-                    withEnv(["PATH+MAVEN=${mvnHome}/bin"]) {
-                        if (isUnix()) {
-                            sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                        } else {
-                            bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                        }
+                    if (isUnix()) {
+                        sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                    } else {
+                        bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
                     }
                 }
             }
             post {
                 always {
-                    script {
-                        if (isUnix()) {
-                            sh '''
-                            if [ -d allure-results ]; then
-                                mkdir -p target/allure-results
-                                cp -r allure-results/* target/allure-results/
-                            fi
-                            chmod -R 777 ${WORKSPACE}
-                            '''
+                    node('any') {
+                        script {
+                            if (isUnix()) {
+                                sh '''
+                                if [ -d allure-results ]; then
+                                    mkdir -p target/allure-results
+                                    cp -r allure-results/* target/allure-results/
+                                fi
+                                chmod -R 777 ${WORKSPACE}
+                                '''
+                            }
                         }
+                        stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                     }
-                    stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                 }
             }
         }
@@ -103,38 +81,31 @@ pipeline {
         stage('Reports') {
             agent any
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-                    }
-                }
+                node('any') {
+                    unstash 'results'
 
-                unstash 'results'
+                    // Generate Allure report safely
+                    allure([
+                            reportBuildPolicy: 'ALWAYS',
+                            results: [[path: 'target/allure-results']]
+                    ])
 
-                script {
-                    // Generate Allure report
-                    if (isUnix()) {
-                        sh 'allure generate target/allure-results -o target/allure-report --clean || true'
-                    }
-                }
+                    // Publish HTML report
+                    publishHTML([
+                            allowMissing:          false,
+                            alwaysLinkToLastBuild: true,
+                            keepAll:               true,
+                            reportDir:             'target/surefire-reports',
+                            reportFiles:           'index.html',
+                            reportName:            'API Test Reports'
+                    ])
 
-                allure results: [[path: 'target/allure-results']]
+                    archiveArtifacts(
+                            artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
+                            allowEmptyArchive: true
+                    )
 
-                publishHTML([
-                        allowMissing: false,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'target/surefire-reports',
-                        reportFiles: 'index.html',
-                        reportName: 'API Test Reports'
-                ])
-
-                archiveArtifacts(
-                        artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
-                        allowEmptyArchive: true
-                )
-
-                script {
+                    // Parse test results
                     def testResults = junit '**/target/surefire-reports/*.xml'
                     env.TEST_TOTAL   = "${testResults.totalCount}"
                     env.TEST_PASSED  = "${testResults.passCount}"
@@ -160,9 +131,9 @@ pipeline {
 
     post {
         always {
-            node {
+            node('any') {
                 script {
-                    // Notifications always run inside node
+                    // Send Slack and email notifications
                     if (params.SEND_NOTIFICATIONS) {
                         def status = currentBuild.currentResult ?: 'SUCCESS'
                         def color  = (status == 'SUCCESS') ? 'good' :
@@ -191,7 +162,7 @@ pipeline {
                         )
                     }
 
-                    // Workspace cleanup
+                    // Cleanup workspace
                     cleanWs()
                 }
             }

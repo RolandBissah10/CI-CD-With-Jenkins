@@ -83,47 +83,48 @@ pipeline {
             steps {
                 node('any') {
                     unstash 'results'
+                    script {
+                        // Generate Allure report safely
+                        allure([
+                                reportBuildPolicy: 'ALWAYS',
+                                results: [[path: 'target/allure-results']]
+                        ])
 
-                    // Generate Allure report safely
-                    allure([
-                            reportBuildPolicy: 'ALWAYS',
-                            results: [[path: 'target/allure-results']]
-                    ])
+                        // Publish HTML report
+                        publishHTML([
+                                allowMissing:          false,
+                                alwaysLinkToLastBuild: true,
+                                keepAll:               true,
+                                reportDir:             'target/surefire-reports',
+                                reportFiles:           'index.html',
+                                reportName:            'API Test Reports'
+                        ])
 
-                    // Publish HTML report
-                    publishHTML([
-                            allowMissing:          false,
-                            alwaysLinkToLastBuild: true,
-                            keepAll:               true,
-                            reportDir:             'target/surefire-reports',
-                            reportFiles:           'index.html',
-                            reportName:            'API Test Reports'
-                    ])
+                        archiveArtifacts(
+                                artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
+                                allowEmptyArchive: true
+                        )
 
-                    archiveArtifacts(
-                            artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
-                            allowEmptyArchive: true
-                    )
+                        // Parse test results
+                        def testResults = junit '**/target/surefire-reports/*.xml'
+                        env.TEST_TOTAL   = "${testResults.totalCount}"
+                        env.TEST_PASSED  = "${testResults.passCount}"
+                        env.TEST_FAILED  = "${testResults.failCount}"
+                        env.TEST_SKIPPED = "${testResults.skipCount}"
 
-                    // Parse test results
-                    def testResults = junit '**/target/surefire-reports/*.xml'
-                    env.TEST_TOTAL   = "${testResults.totalCount}"
-                    env.TEST_PASSED  = "${testResults.passCount}"
-                    env.TEST_FAILED  = "${testResults.failCount}"
-                    env.TEST_SKIPPED = "${testResults.skipCount}"
-
-                    def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
-                    def failedItems = []
-                    if (fileList) {
-                        for (filePath in fileList.split('\n')) {
-                            def content = readFile(filePath.trim())
-                            def matcher = (content =~ /<testcase name="([^"]*)"[^>]*>[\s\S]*?<failure message="([^"]*)"/)
-                            while (matcher.find()) {
-                                failedItems.add(" - ${matcher.group(1)}: ${matcher.group(2)}")
+                        def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
+                        def failedItems = []
+                        if (fileList) {
+                            for (filePath in fileList.split('\n')) {
+                                def content = readFile(filePath.trim())
+                                def matcher = (content =~ /<testcase name="([^"]*)"[^>]*>[\s\S]*?<failure message="([^"]*)"/)
+                                while (matcher.find()) {
+                                    failedItems.add(" - ${matcher.group(1)}: ${matcher.group(2)}")
+                                }
                             }
                         }
+                        env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
                     }
-                    env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
                 }
             }
         }

@@ -17,6 +17,11 @@ pipeline {
     environment {
         BASE_URL = "${params.BASE_URL ?: 'https://fakestoreapi.com'}"
         EMAIL_TO = credentials('QA_EMAIL_RECIPIENT')
+        TEST_TOTAL = "0"
+        TEST_PASSED = "0"
+        TEST_FAILED = "0"
+        TEST_SKIPPED = "0"
+        TEST_FAILURE_LIST = " - None (All tests passed)"
     }
 
     options {
@@ -52,7 +57,6 @@ pipeline {
             steps {
                 unstash 'source'
                 script {
-                    // Use Jenkins Maven tool
                     def mvnHome = tool name: 'maven3', type: 'maven'
                     withEnv(["PATH+MAVEN=${mvnHome}/bin"]) {
                         if (isUnix()) {
@@ -86,7 +90,11 @@ pipeline {
             steps {
                 unstash 'results'
 
-                allure results: [[path: 'target/allure-results']]
+                // Use Jenkins Allure CLI tool
+                allure([
+                        results: [[path: 'target/allure-results']],
+                        commandline: tool(name: 'Allure-2.21.0', type: 'Allure')
+                ])
 
                 publishHTML([
                         allowMissing:          false,
@@ -103,12 +111,6 @@ pipeline {
                 )
 
                 script {
-                    def testResults = junit '**/target/surefire-reports/*.xml'
-                    env.TEST_TOTAL   = "${testResults.totalCount}"
-                    env.TEST_PASSED  = "${testResults.passCount}"
-                    env.TEST_FAILED  = "${testResults.failCount}"
-                    env.TEST_SKIPPED = "${testResults.skipCount}"
-
                     def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
                     def failedItems = []
                     if (fileList) {
@@ -121,48 +123,52 @@ pipeline {
                         }
                     }
                     env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
-                }
-            }
-            post {
-                always {
-                    script {
-                        if (params.SEND_NOTIFICATIONS) {
-                            def status = currentBuild.currentResult ?: 'SUCCESS'
-                            def color  = (status == 'SUCCESS') ? 'good' :
-                                    (status == 'UNSTABLE' ? 'warning' : 'danger')
 
-                            def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
-                                    "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
-                                    "Total: *${env.TEST_TOTAL ?: '0'}* | Passed: *${env.TEST_PASSED ?: '0'}* | Failed: *${env.TEST_FAILED ?: '0'}* | Skipped: *${env.TEST_SKIPPED ?: '0'}*\n\n" +
-                                    "*Failed test(s) and why:*\n${env.TEST_FAILURE_LIST}\n\n" +
-                                    "Build URL: ${env.BUILD_URL}\n" +
-                                    "Allure Report: ${env.BUILD_URL}allure/"
-
-                            slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
-
-                            emailext(
-                                    subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
-                                    to:        env.EMAIL_TO,
-                                    mimeType:  'text/html',
-                                    attachLog: true,
-                                    body: "<h3>FakeStore API Tests — ${status}</h3>" +
-                                            "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
-                                            "<p><b>Branch:</b> ${env.BRANCH_NAME ?: 'main'} | <b>Author:</b> ${env.GIT_AUTHOR ?: 'N/A'}</p>" +
-                                            "<p><b>Results:</b> Total: ${env.TEST_TOTAL ?: 0} | Passed: ${env.TEST_PASSED ?: 0} | Failed: ${env.TEST_FAILED ?: 0} | Skipped: ${env.TEST_SKIPPED ?: 0}</p>" +
-                                            "<pre>${env.TEST_FAILURE_LIST}</pre>" +
-                                            "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
-                            )
-                        }
-                    }
-                    script { sh 'chmod -R 777 ${WORKSPACE} 2>/dev/null || true' }
+                    def testResults = junit '**/target/surefire-reports/*.xml'
+                    env.TEST_TOTAL   = "${testResults.totalCount}"
+                    env.TEST_PASSED  = "${testResults.passCount}"
+                    env.TEST_FAILED  = "${testResults.failCount}"
+                    env.TEST_SKIPPED = "${testResults.skipCount}"
                 }
             }
         }
     }
 
     post {
+        always {
+            script {
+                if (params.SEND_NOTIFICATIONS) {
+                    def status = currentBuild.currentResult ?: 'SUCCESS'
+                    def color  = (status == 'SUCCESS') ? 'good' :
+                            (status == 'UNSTABLE' ? 'warning' : 'danger')
+
+                    def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
+                            "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
+                            "Total: *${env.TEST_TOTAL ?: '0'}* | Passed: *${env.TEST_PASSED ?: '0'}* | Failed: *${env.TEST_FAILED ?: '0'}* | Skipped: *${env.TEST_SKIPPED ?: '0'}*\n\n" +
+                            "*Failed test(s) and why:*\n${env.TEST_FAILURE_LIST ?: ' - None (All tests passed)'}\n\n" +
+                            "Build URL: ${env.BUILD_URL}\n" +
+                            "Allure Report: ${env.BUILD_URL}allure/"
+
+                    slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
+
+                    emailext(
+                            subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
+                            to:        env.EMAIL_TO,
+                            mimeType:  'text/html',
+                            attachLog: true,
+                            body: "<h3>FakeStore API Tests — ${status}</h3>" +
+                                    "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
+                                    "<p><b>Branch:</b> ${env.BRANCH_NAME ?: 'main'} | <b>Author:</b> ${env.GIT_AUTHOR ?: 'N/A'}</p>" +
+                                    "<p><b>Results:</b> Total: ${env.TEST_TOTAL ?: 0} | Passed: ${env.TEST_PASSED ?: 0} | Failed: ${env.TEST_FAILED ?: 0} | Skipped: ${env.TEST_SKIPPED ?: 0}</p>" +
+                                    "<pre>${env.TEST_FAILURE_LIST ?: ' - None (All tests passed)'}</pre>" +
+                                    "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
+                    )
+                }
+            }
+        }
+
         cleanup {
-            steps { cleanWs() }
+            cleanWs()
         }
     }
 }

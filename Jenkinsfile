@@ -37,14 +37,34 @@ pipeline {
         stage('Checkout') {
             agent any
             steps {
-                checkout scm: [$class: 'GitSCM', branches: [[name: 'main']],
-                               userRemoteConfigs: [[url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git']]]
+                git branch: 'main', url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git'
                 script {
                     env.GIT_AUTHOR = isUnix() ?
                             sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim() :
                             bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
                 }
                 echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
+            }
+        }
+
+        stage('Install Allure CLI') {
+            agent any
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh '''
+                        if ! command -v allure &> /dev/null; then
+                            echo "Installing Allure CLI..."
+                            wget https://github.com/allure-framework/allure2/releases/download/2.27.0/allure-2.27.0.tgz
+                            tar -xzf allure-2.27.0.tgz
+                            mv allure-2.27.0 /opt/allure
+                            export PATH=/opt/allure/bin:$PATH
+                        fi
+                        '''
+                    } else {
+                        echo "Please install Allure CLI manually on Windows nodes"
+                    }
+                }
             }
         }
 
@@ -91,15 +111,22 @@ pipeline {
 
                 unstash 'results'
 
+                script {
+                    // Generate Allure report
+                    if (isUnix()) {
+                        sh 'allure generate target/allure-results -o target/allure-report --clean || true'
+                    }
+                }
+
                 allure results: [[path: 'target/allure-results']]
 
                 publishHTML([
-                        allowMissing:          false,
+                        allowMissing: false,
                         alwaysLinkToLastBuild: true,
-                        keepAll:               true,
-                        reportDir:             'target/surefire-reports',
-                        reportFiles:           'index.html',
-                        reportName:            'API Test Reports'
+                        keepAll: true,
+                        reportDir: 'target/surefire-reports',
+                        reportFiles: 'index.html',
+                        reportName: 'API Test Reports'
                 ])
 
                 archiveArtifacts(
@@ -128,42 +155,44 @@ pipeline {
                     env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
                 }
             }
-            post {
-                always {
-                    script {
-                        if (params.SEND_NOTIFICATIONS) {
-                            def status = currentBuild.currentResult ?: 'SUCCESS'
-                            def color  = (status == 'SUCCESS') ? 'good' :
-                                    (status == 'UNSTABLE' ? 'warning' : 'danger')
+        }
+    }
 
-                            def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
-                                    "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
-                                    "Total: *${env.TEST_TOTAL ?: '0'}* | Passed: *${env.TEST_PASSED ?: '0'}* | Failed: *${env.TEST_FAILED ?: '0'}* | Skipped: *${env.TEST_SKIPPED ?: '0'}*\n\n" +
-                                    "*Failed test(s) and why:*\n${env.TEST_FAILURE_LIST}\n\n" +
-                                    "Build URL: ${env.BUILD_URL}\n" +
-                                    "Allure Report: ${env.BUILD_URL}allure/"
+    post {
+        always {
+            node {
+                script {
+                    // Notifications always run inside node
+                    if (params.SEND_NOTIFICATIONS) {
+                        def status = currentBuild.currentResult ?: 'SUCCESS'
+                        def color  = (status == 'SUCCESS') ? 'good' :
+                                (status == 'UNSTABLE' ? 'warning' : 'danger')
 
-                            slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
+                        def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
+                                "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
+                                "Total: *${env.TEST_TOTAL ?: '0'}* | Passed: *${env.TEST_PASSED ?: '0'}* | Failed: *${env.TEST_FAILED ?: '0'}* | Skipped: *${env.TEST_SKIPPED ?: '0'}*\n\n" +
+                                "*Failed test(s) and why:*\n${env.TEST_FAILURE_LIST}\n\n" +
+                                "Build URL: ${env.BUILD_URL}\n" +
+                                "Allure Report: ${env.BUILD_URL}allure/"
 
-                            emailext(
-                                    subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
-                                    to:        env.EMAIL_TO,
-                                    mimeType:  'text/html',
-                                    attachLog: true,
-                                    body: "<h3>FakeStore API Tests — ${status}</h3>" +
-                                            "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
-                                            "<p><b>Branch:</b> ${env.BRANCH_NAME ?: 'main'} | <b>Author:</b> ${env.GIT_AUTHOR ?: 'N/A'}</p>" +
-                                            "<p><b>Results:</b> Total: ${env.TEST_TOTAL ?: 0} | Passed: ${env.TEST_PASSED ?: 0} | Failed: ${env.TEST_FAILED ?: 0} | Skipped: ${env.TEST_SKIPPED ?: 0}</p>" +
-                                            "<pre>${env.TEST_FAILURE_LIST}</pre>" +
-                                            "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
-                            )
-                        }
+                        slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
+
+                        emailext(
+                                subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
+                                to:        env.EMAIL_TO,
+                                mimeType:  'text/html',
+                                attachLog: true,
+                                body: "<h3>FakeStore API Tests — ${status}</h3>" +
+                                        "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
+                                        "<p><b>Branch:</b> ${env.BRANCH_NAME ?: 'main'} | <b>Author:</b> ${env.GIT_AUTHOR ?: 'N/A'}</p>" +
+                                        "<p><b>Results:</b> Total: ${env.TEST_TOTAL ?: 0} | Passed: ${env.TEST_PASSED ?: 0} | Failed: ${env.TEST_FAILED ?: 0} | Skipped: ${env.TEST_SKIPPED ?: 0}</p>" +
+                                        "<pre>${env.TEST_FAILURE_LIST}</pre>" +
+                                        "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
+                        )
                     }
-                    script {
-                        node {
-                            cleanWs() // ensure workspace cleanup always has a node context
-                        }
-                    }
+
+                    // Workspace cleanup
+                    cleanWs()
                 }
             }
         }

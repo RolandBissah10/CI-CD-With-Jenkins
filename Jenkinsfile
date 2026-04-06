@@ -2,8 +2,16 @@ pipeline {
     agent none
 
     parameters {
-        string(name: 'BASE_URL', defaultValue: 'https://fakestoreapi.com', description: 'Target API base URL')
-        booleanParam(name: 'SEND_NOTIFICATIONS', defaultValue: true, description: 'Send Slack + email notifications')
+        string(
+                name: 'BASE_URL',
+                defaultValue: 'https://fakestoreapi.com',
+                description: 'Target API base URL'
+        )
+        booleanParam(
+                name: 'SEND_NOTIFICATIONS',
+                defaultValue: true,
+                description: 'Send Slack + email notifications'
+        )
     }
 
     environment {
@@ -31,7 +39,9 @@ pipeline {
             steps {
                 git branch: 'main', url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git'
                 script {
-                    env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
+                    env.GIT_AUTHOR = isUnix() ?
+                            sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim() :
+                            bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
                 }
                 echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
             }
@@ -41,23 +51,27 @@ pipeline {
             agent any
             steps {
                 script {
-                    docker.image('maven:3.9.5-eclipse-temurin-17-alpine').inside('-u root') {
+                    if (isUnix()) {
                         sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                    } else {
+                        bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
                     }
                 }
             }
             post {
                 always {
                     script {
-                        sh '''
-                        if [ -d allure-results ]; then
-                            mkdir -p target/allure-results
-                            cp -r allure-results/* target/allure-results/
-                        fi
-                        chmod -R 777 ${WORKSPACE}
-                        '''
-                        stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
+                        if (isUnix()) {
+                            sh '''
+                            if [ -d allure-results ]; then
+                                mkdir -p target/allure-results
+                                cp -r allure-results/* target/allure-results/
+                            fi
+                            chmod -R 777 ${WORKSPACE}
+                            '''
+                        }
                     }
+                    stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                 }
             }
         }
@@ -66,32 +80,36 @@ pipeline {
             agent any
             steps {
                 script {
-                    sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-                    unstash 'results'
+                    if (isUnix()) {
+                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
+                    }
+                }
 
-                    allure results: [[path: 'target/allure-results']]
+                unstash 'results'
 
-                    publishHTML([
-                            allowMissing: false,
-                            alwaysLinkToLastBuild: true,
-                            keepAll: true,
-                            reportDir: 'target/surefire-reports',
-                            reportFiles: 'index.html',
-                            reportName: 'API Test Reports'
-                    ])
+                allure results: [[path: 'target/allure-results']]
 
-                    archiveArtifacts(
-                            artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
-                            allowEmptyArchive: true
-                    )
+                publishHTML([
+                        allowMissing:          false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll:               true,
+                        reportDir:             'target/surefire-reports',
+                        reportFiles:           'index.html',
+                        reportName:            'API Test Reports'
+                ])
 
+                archiveArtifacts(
+                        artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
+                        allowEmptyArchive: true
+                )
+
+                script {
                     def testResults = junit '**/target/surefire-reports/*.xml'
                     env.TEST_TOTAL   = "${testResults.totalCount}"
                     env.TEST_PASSED  = "${testResults.passCount}"
                     env.TEST_FAILED  = "${testResults.failCount}"
                     env.TEST_SKIPPED = "${testResults.skipCount}"
 
-                    // Collect failed test info
                     def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
                     def failedItems = []
                     if (fileList) {
@@ -111,7 +129,8 @@ pipeline {
                     script {
                         if (params.SEND_NOTIFICATIONS) {
                             def status = currentBuild.currentResult ?: 'SUCCESS'
-                            def color = (status == 'SUCCESS') ? 'good' : (status == 'UNSTABLE' ? 'warning' : 'danger')
+                            def color  = (status == 'SUCCESS') ? 'good' :
+                                    (status == 'UNSTABLE' ? 'warning' : 'danger')
 
                             def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
                                     "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
@@ -123,9 +142,9 @@ pipeline {
                             slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
 
                             emailext(
-                                    subject: "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
-                                    to: env.EMAIL_TO,
-                                    mimeType: 'text/html',
+                                    subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
+                                    to:        env.EMAIL_TO,
+                                    mimeType:  'text/html',
                                     attachLog: true,
                                     body: "<h3>FakeStore API Tests — ${status}</h3>" +
                                             "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
@@ -135,8 +154,8 @@ pipeline {
                                             "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
                             )
                         }
-                        sh 'chmod -R 777 ${WORKSPACE} 2>/dev/null || true'
                     }
+                    script { sh 'chmod -R 777 ${WORKSPACE} 2>/dev/null || true' }
                 }
             }
         }
@@ -144,7 +163,6 @@ pipeline {
 
     post {
         cleanup {
-            agent any
             steps {
                 cleanWs()
             }

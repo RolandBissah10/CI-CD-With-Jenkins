@@ -33,7 +33,6 @@ pipeline {
     }
 
     stages {
-
         stage('Checkout') {
             agent any
             steps {
@@ -44,17 +43,23 @@ pipeline {
                             bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
                 }
                 echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
+                stash name: 'source', includes: '**/*'
             }
         }
 
         stage('Test') {
             agent any
             steps {
+                unstash 'source'
                 script {
-                    if (isUnix()) {
-                        sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                    } else {
-                        bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                    // Use Jenkins Maven tool
+                    def mvnHome = tool name: 'maven3', type: 'maven'
+                    withEnv(["PATH+MAVEN=${mvnHome}/bin"]) {
+                        if (isUnix()) {
+                            sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                        } else {
+                            bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                        }
                     }
                 }
             }
@@ -79,12 +84,6 @@ pipeline {
         stage('Reports') {
             agent any
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-                    }
-                }
-
                 unstash 'results'
 
                 allure results: [[path: 'target/allure-results']]
@@ -163,9 +162,7 @@ pipeline {
 
     post {
         cleanup {
-            steps {
-                cleanWs()
-            }
+            steps { cleanWs() }
         }
     }
 }

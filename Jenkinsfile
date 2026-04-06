@@ -136,7 +136,7 @@ pipeline {
                                     "Build URL: ${env.BUILD_URL}\n" +
                                     "Allure Report: ${env.BUILD_URL}allure/"
 
-                            slackSend(channel: '#jenkins_ci_report', color: color, message: slackMsg)
+                            slackSend(channel: '#jenkins_ci_report', color: color, message: slackMsg, botUser: true)
 
                             emailext(
                                     subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",

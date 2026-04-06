@@ -2,16 +2,8 @@ pipeline {
     agent none
 
     parameters {
-        string(
-                name: 'BASE_URL',
-                defaultValue: 'https://fakestoreapi.com',
-                description: 'Target API base URL'
-        )
-        booleanParam(
-                name: 'SEND_NOTIFICATIONS',
-                defaultValue: true,
-                description: 'Send Slack + email notifications'
-        )
+        string(name: 'BASE_URL', defaultValue: 'https://fakestoreapi.com', description: 'Target API base URL')
+        booleanParam(name: 'SEND_NOTIFICATIONS', defaultValue: true, description: 'Send Slack + email notifications')
     }
 
     environment {
@@ -46,10 +38,9 @@ pipeline {
         }
 
         stage('Test') {
-            agent none
+            agent any
             steps {
                 script {
-                    // Run Maven tests inside Docker
                     docker.image('maven:3.9.5-eclipse-temurin-17-alpine').inside('-u root') {
                         sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
                     }
@@ -58,7 +49,6 @@ pipeline {
             post {
                 always {
                     script {
-                        // Copy results to target folder
                         sh '''
                         if [ -d allure-results ]; then
                             mkdir -p target/allure-results
@@ -66,10 +56,7 @@ pipeline {
                         fi
                         chmod -R 777 ${WORKSPACE}
                         '''
-                        // Stash test results if present
-                        if (fileExists('target/allure-results') || fileExists('target/surefire-reports')) {
-                            stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
-                        }
+                        stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                     }
                 }
             }
@@ -79,16 +66,11 @@ pipeline {
             agent any
             steps {
                 script {
-                    // Clean workspace before unstash
                     sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-
-                    // Retrieve stashed results
                     unstash 'results'
 
-                    // Allure report
                     allure results: [[path: 'target/allure-results']]
 
-                    // HTML reports
                     publishHTML([
                             allowMissing: false,
                             alwaysLinkToLastBuild: true,
@@ -98,13 +80,11 @@ pipeline {
                             reportName: 'API Test Reports'
                     ])
 
-                    // Archive artifacts
                     archiveArtifacts(
                             artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
                             allowEmptyArchive: true
                     )
 
-                    // Gather JUnit test results
                     def testResults = junit '**/target/surefire-reports/*.xml'
                     env.TEST_TOTAL   = "${testResults.totalCount}"
                     env.TEST_PASSED  = "${testResults.passCount}"
@@ -112,8 +92,7 @@ pipeline {
                     env.TEST_SKIPPED = "${testResults.skipCount}"
 
                     // Collect failed test info
-                    def fileList = sh(returnStdout: true,
-                            script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
+                    def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
                     def failedItems = []
                     if (fileList) {
                         for (filePath in fileList.split('\n')) {
@@ -132,8 +111,7 @@ pipeline {
                     script {
                         if (params.SEND_NOTIFICATIONS) {
                             def status = currentBuild.currentResult ?: 'SUCCESS'
-                            def color = (status == 'SUCCESS') ? 'good'
-                                    : (status == 'UNSTABLE' ? 'warning' : 'danger')
+                            def color = (status == 'SUCCESS') ? 'good' : (status == 'UNSTABLE' ? 'warning' : 'danger')
 
                             def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
                                     "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
@@ -166,8 +144,8 @@ pipeline {
 
     post {
         cleanup {
-            // Wrap cleanWs inside node to fix agent none issue
-            node('master') {
+            agent any
+            steps {
                 cleanWs()
             }
         }

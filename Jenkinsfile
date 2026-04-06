@@ -2,34 +2,13 @@ pipeline {
     agent none
 
     parameters {
-        string(
-                name: 'BASE_URL',
-                defaultValue: 'https://fakestoreapi.com',
-                description: 'Target API base URL'
-        )
-        booleanParam(
-                name: 'SEND_NOTIFICATIONS',
-                defaultValue: true,
-                description: 'Send Slack + email notifications'
-        )
+        string(name: 'BASE_URL', defaultValue: 'https://fakestoreapi.com', description: 'Target API base URL')
+        booleanParam(name: 'SEND_NOTIFICATIONS', defaultValue: true, description: 'Send Slack + email notifications')
     }
 
     environment {
         BASE_URL = "${params.BASE_URL ?: 'https://fakestoreapi.com'}"
         EMAIL_TO = credentials('QA_EMAIL_RECIPIENT')
-    }
-
-    options {
-        buildDiscarder(logRotator(numToKeepStr: '20'))
-        disableConcurrentBuilds()
-        timeout(time: 20, unit: 'MINUTES')
-        timestamps()
-        // ❌ removed ansiColor (plugin missing)
-    }
-
-    triggers {
-        githubPush()
-        cron('H 2 * * *')
     }
 
     stages {
@@ -38,40 +17,21 @@ pipeline {
             agent any
             steps {
                 git branch: 'main', url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git'
-                script {
-                    env.GIT_AUTHOR = isUnix() ?
-                            sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim() :
-                            bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
-                }
-                echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
             }
         }
 
         stage('Test') {
-            agent any   // ✅ replaced docker agent
+            agent { docker { image 'maven:3.9.2-openjdk-17' } }
             steps {
-                script {
-                    if (isUnix()) {
-                        sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                    } else {
-                        bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                    }
-                }
+                sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
             }
             post {
                 always {
                     script {
-                        if (isUnix()) {
-                            sh '''
-                            if [ -d allure-results ]; then
-                                mkdir -p target/allure-results
-                                cp -r allure-results/* target/allure-results/
-                            fi
-                            chmod -R 777 ${WORKSPACE}
-                            '''
+                        if (fileExists('target/allure-results') || fileExists('target/surefire-reports')) {
+                            stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                         }
                     }
-                    stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                 }
             }
         }
@@ -79,12 +39,6 @@ pipeline {
         stage('Reports') {
             agent any
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-                    }
-                }
-
                 unstash 'results'
 
                 allure results: [[path: 'target/allure-results']]
@@ -115,8 +69,10 @@ pipeline {
     }
 
     post {
-        cleanup {
-            cleanWs()
+        always {
+            node {
+                cleanWs()
+            }
         }
     }
 }

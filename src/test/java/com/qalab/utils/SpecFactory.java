@@ -27,6 +27,21 @@ public class SpecFactory {
                 .build();
     }
 
+    /**
+     * Spec with URL encoding disabled — use this when the path has already been
+     * manually encoded (e.g. category names with apostrophes / spaces).
+     */
+    public static RequestSpecification requestSpecNoEncode() {
+        return new RequestSpecBuilder()
+                .setBaseUri(CommonData.resolveBaseUrl())
+                .setContentType(ContentType.JSON)
+                .setAccept(ContentType.JSON)
+                .setUrlEncodingEnabled(false)
+                .addFilter(new AllureRestAssured())
+                .log(LogDetail.ALL)
+                .build();
+    }
+
     public static ResponseSpecification okSpec() {
         return new ResponseSpecBuilder()
                 .expectStatusCode(200)

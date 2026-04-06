@@ -22,6 +22,7 @@ public abstract class BaseTest {
     protected final Logger log = LoggerFactory.getLogger(getClass());
 
     protected RequestSpecification  requestSpec;
+    protected RequestSpecification  requestSpecNoEncode;
     protected ResponseSpecification okSpec;
 
     @BeforeAll
@@ -31,7 +32,8 @@ public abstract class BaseTest {
 
     @BeforeEach
     void setUp() {
-        requestSpec = SpecFactory.requestSpec();
-        okSpec      = SpecFactory.okSpec();
+        requestSpec         = SpecFactory.requestSpec();
+        requestSpecNoEncode = SpecFactory.requestSpecNoEncode();
+        okSpec              = SpecFactory.okSpec();
     }
 }

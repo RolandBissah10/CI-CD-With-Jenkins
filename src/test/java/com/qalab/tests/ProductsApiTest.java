@@ -29,8 +29,8 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products - returns 20 products")
     void getAllProducts_returns20Products() {
         List<Object> prices = given().spec(requestSpec)
-            .when().get(ProductsEndpoints.PRODUCTS)
-            .then().spec(okSpec)
+                .when().get(ProductsEndpoints.PRODUCTS)
+                .then().spec(okSpec)
                 .body("size()",   greaterThan(0))
                 .body("id",       everyItem(notNullValue()))
                 .body("title",    everyItem(notNullValue()))
@@ -49,12 +49,12 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products/{id} - returns product with correct id")
     void getProductById_returnsCorrectProduct(int productId) {
         Object price = given().spec(requestSpec)
-            .when().get(ProductsEndpoints.byId(productId))
-            .then().spec(okSpec)
-                .body("id",             equalTo(productId))
-                .body("title",          notNullValue())
-                .body("rating.rate",    notNullValue())
-                .body("rating.count",   notNullValue())
+                .when().get(ProductsEndpoints.byId(productId))
+                .then().spec(okSpec)
+                .body("id",           equalTo(productId))
+                .body("title",        notNullValue())
+                .body("rating.rate",  notNullValue())
+                .body("rating.count", notNullValue())
                 .extract().path("price");
 
         assertThat(Double.parseDouble(String.valueOf(price))).isGreaterThan(0.0);
@@ -66,8 +66,8 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products/0 - invalid id returns empty or error")
     void getProductById_invalidId_returnsErrorOrEmpty() {
         int status = given().spec(requestSpec)
-            .when().get(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_INVALID))
-            .then().extract().statusCode();
+                .when().get(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_INVALID))
+                .then().extract().statusCode();
 
         assertThat(status).isIn(200, 404);
     }
@@ -81,9 +81,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products?limit={n} - returns exactly n products")
     void getProducts_withLimit_returnsCorrectCount(int limit) {
         given().spec(requestSpec)
-            .queryParam("limit", limit)
-            .when().get(ProductsEndpoints.PRODUCTS)
-            .then().spec(okSpec)
+                .queryParam("limit", limit)
+                .when().get(ProductsEndpoints.PRODUCTS)
+                .then().spec(okSpec)
                 .body("size()", equalTo(limit));
     }
 
@@ -95,9 +95,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products?sort=asc - IDs are ascending")
     void getProducts_sortAsc_idsAreAscending() {
         List<Integer> ids = given().spec(requestSpec)
-            .queryParam("sort", "asc")
-            .when().get(ProductsEndpoints.PRODUCTS)
-            .then().spec(okSpec)
+                .queryParam("sort", "asc")
+                .when().get(ProductsEndpoints.PRODUCTS)
+                .then().spec(okSpec)
                 .extract().jsonPath().getList("id", Integer.class);
 
         assertThat(ids).isSortedAccordingTo(Integer::compareTo);
@@ -109,9 +109,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products?sort=desc - IDs are descending")
     void getProducts_sortDesc_idsAreDescending() {
         List<Integer> ids = given().spec(requestSpec)
-            .queryParam("sort", "desc")
-            .when().get(ProductsEndpoints.PRODUCTS)
-            .then().spec(okSpec)
+                .queryParam("sort", "desc")
+                .when().get(ProductsEndpoints.PRODUCTS)
+                .then().spec(okSpec)
                 .extract().jsonPath().getList("id", Integer.class);
 
         assertThat(ids).isSortedAccordingTo(Comparator.reverseOrder());
@@ -125,12 +125,12 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products/categories - returns all 4 known categories")
     void getAllCategories_returnsExpectedCategories() {
         List<String> categories = given().spec(requestSpec)
-            .when().get(ProductsEndpoints.CATEGORIES)
-            .then().spec(okSpec)
+                .when().get(ProductsEndpoints.CATEGORIES)
+                .then().spec(okSpec)
                 .extract().jsonPath().getList(".", String.class);
 
         assertThat(categories).containsAll(
-            java.util.Arrays.asList(ProductsData.CATEGORIES)
+                java.util.Arrays.asList(ProductsData.CATEGORIES)
         );
     }
 
@@ -140,9 +140,12 @@ class ProductsApiTest extends BaseTest {
     @ValueSource(strings = {"electronics", "jewelery", "men's clothing", "women's clothing"})
     @DisplayName("GET /products/category/{name} - all products match the category")
     void getProductsByCategory_allMatchCategory(String category) {
-        given().spec(requestSpec)
-            .when().get(ProductsEndpoints.byCategory(category))
-            .then().spec(okSpec)
+        // ProductsEndpoints.byCategory() pre-encodes the path (apostrophe → %27, space → %20).
+        // We must disable REST Assured's automatic URL encoding here, otherwise it will
+        // re-encode the % signs and produce double-encoding (men%2527s%2520clothing).
+        given().spec(requestSpecNoEncode)
+                .when().get(ProductsEndpoints.byCategory(category))
+                .then().spec(okSpec)
                 .body("size()", greaterThanOrEqualTo(0));
     }
 
@@ -154,9 +157,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("POST /products - creates product and returns new id")
     void createProduct_returnsNewId() {
         given().spec(requestSpec)
-            .body(ProductsData.newProduct())
-            .when().post(ProductsEndpoints.PRODUCTS)
-            .then().statusCode(anyOf(is(200), is(201)))
+                .body(ProductsData.newProduct())
+                .when().post(ProductsEndpoints.PRODUCTS)
+                .then().statusCode(anyOf(is(200), is(201)))
                 .body("id",       notNullValue())
                 .body("title",    equalTo(ProductsData.PRODUCT_NEW_TITLE))
                 .body("price",    equalTo((float) ProductsData.PRODUCT_NEW_PRICE))
@@ -171,9 +174,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("PUT /products/{id} - full update returns updated fields")
     void updateProduct_fullUpdate_fieldsAreUpdated() {
         given().spec(requestSpec)
-            .body(ProductsData.updatedProduct())
-            .when().put(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_UPDATE))
-            .then().spec(okSpec)
+                .body(ProductsData.updatedProduct())
+                .when().put(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_UPDATE))
+                .then().spec(okSpec)
                 .body("title", equalTo(ProductsData.PRODUCT_UPDATED_TITLE))
                 .body("price", equalTo((float) ProductsData.PRODUCT_UPDATED_PRICE));
     }
@@ -184,9 +187,9 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("PATCH /products/{id} - partial update changes only given fields")
     void patchProduct_onlyChangedFieldsUpdated() {
         given().spec(requestSpec)
-            .body(ProductsData.patchedProduct())
-            .when().patch(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_UPDATE))
-            .then().spec(okSpec)
+                .body(ProductsData.patchedProduct())
+                .when().patch(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_UPDATE))
+                .then().spec(okSpec)
                 .body("title", equalTo(ProductsData.PRODUCT_PATCHED_TITLE))
                 .body("price", equalTo((float) ProductsData.PRODUCT_PATCHED_PRICE));
     }
@@ -199,8 +202,8 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("DELETE /products/{id} - returns deleted product data")
     void deleteProduct_returnsDeletedProductData() {
         given().spec(requestSpec)
-            .when().delete(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_DELETE))
-            .then().spec(okSpec)
+                .when().delete(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_TO_DELETE))
+                .then().spec(okSpec)
                 .body("id", equalTo(ProductsData.PRODUCT_ID_TO_DELETE));
     }
 
@@ -212,8 +215,8 @@ class ProductsApiTest extends BaseTest {
     @DisplayName("GET /products/{id} - response has all required fields")
     void getProduct_hasAllRequiredFields() {
         given().spec(requestSpec)
-            .when().get(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_FIRST))
-            .then().spec(okSpec)
+                .when().get(ProductsEndpoints.byId(ProductsData.PRODUCT_ID_FIRST))
+                .then().spec(okSpec)
                 .body("$", hasKey("id"))
                 .body("$", hasKey("title"))
                 .body("$", hasKey("price"))

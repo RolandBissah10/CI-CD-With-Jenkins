@@ -3,14 +3,14 @@ pipeline {
 
     parameters {
         string(
-                name: 'BASE_URL',
+                name:         'BASE_URL',
                 defaultValue: 'https://fakestoreapi.com',
-                description: 'Target API base URL'
+                description:  'Target API base URL'
         )
         booleanParam(
-                name: 'SEND_NOTIFICATIONS',
+                name:         'SEND_NOTIFICATIONS',
                 defaultValue: true,
-                description: 'Send Slack + email notifications'
+                description:  'Send Slack + email notifications'
         )
     }
 
@@ -40,9 +40,7 @@ pipeline {
                 checkout scm: [$class: 'GitSCM', branches: [[name: 'main']],
                                userRemoteConfigs: [[url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git']]]
                 script {
-                    env.GIT_AUTHOR = isUnix() ?
-                            sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim() :
-                            bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
+                    env.GIT_AUTHOR = sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
                 }
                 echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
             }
@@ -54,28 +52,16 @@ pipeline {
                 script {
                     def mvnHome = tool name: 'maven3', type: 'maven'
                     withEnv(["PATH+MAVEN=${mvnHome}/bin"]) {
-                        if (isUnix()) {
-                            sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                        } else {
-                            bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
-                        }
+                        sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
                     }
                 }
             }
             post {
                 always {
-                    script {
-                        if (isUnix()) {
-                            sh '''
-                            if [ -d allure-results ]; then
-                                mkdir -p target/allure-results
-                                cp -r allure-results/* target/allure-results/
-                            fi
-                            chmod -R 777 ${WORKSPACE}
-                            '''
-                        }
-                    }
+                    // Merge any root-level allure-results into target/ as a fallback
+                    sh 'if [ -d allure-results ]; then mkdir -p target/allure-results && cp -r allure-results/* target/allure-results/; fi'
                     stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
+                    sh 'chmod -R 777 ${WORKSPACE}'
                 }
             }
         }
@@ -83,18 +69,21 @@ pipeline {
         stage('Reports') {
             agent any
             steps {
-                script {
-                    if (isUnix()) {
-                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
-                    }
-                }
-
+                // Only wipe the target/ folder — leave .git and workspace metadata intact
+                sh 'rm -rf target 2>/dev/null || true'
                 unstash 'results'
 
-                allure results: [[path: 'target/allure-results']]
+                // NOTE: 'allure' must match the name configured in
+                // Manage Jenkins → Global Tool Configuration → Allure Commandline
+                allure([
+                        includeProperties: false,
+                        jdk:               '',
+                        results:           [[path: 'target/allure-results']],
+                        commandline:       'allure'
+                ])
 
                 publishHTML([
-                        allowMissing:          false,
+                        allowMissing:          true,
                         alwaysLinkToLastBuild: true,
                         keepAll:               true,
                         reportDir:             'target/surefire-reports',
@@ -103,18 +92,20 @@ pipeline {
                 ])
 
                 archiveArtifacts(
-                        artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
+                        artifacts:         'target/surefire-reports/**/*.xml, target/allure-report/**',
                         allowEmptyArchive: true
                 )
 
                 script {
-                    def testResults = junit '**/target/surefire-reports/*.xml'
+                    def testResults    = junit testResults: '**/target/surefire-reports/*.xml',
+                            allowEmptyResults: true
                     env.TEST_TOTAL   = "${testResults.totalCount}"
                     env.TEST_PASSED  = "${testResults.passCount}"
                     env.TEST_FAILED  = "${testResults.failCount}"
                     env.TEST_SKIPPED = "${testResults.skipCount}"
 
-                    def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
+                    def fileList    = sh(returnStdout: true,
+                            script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
                     def failedItems = []
                     if (fileList) {
                         for (filePath in fileList.split('\n')) {
@@ -125,7 +116,9 @@ pipeline {
                             }
                         }
                     }
-                    env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
+                    env.TEST_FAILURE_LIST = failedItems
+                            ? failedItems.join("\n")
+                            : " - None (All tests passed)"
                 }
             }
             post {
@@ -133,8 +126,8 @@ pipeline {
                     script {
                         if (params.SEND_NOTIFICATIONS) {
                             def status = currentBuild.currentResult ?: 'SUCCESS'
-                            def color  = (status == 'SUCCESS') ? 'good' :
-                                    (status == 'UNSTABLE' ? 'warning' : 'danger')
+                            def color  = (status == 'SUCCESS') ? 'good'
+                                    : (status == 'UNSTABLE' ? 'warning' : 'danger')
 
                             def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
                                     "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
@@ -159,11 +152,7 @@ pipeline {
                             )
                         }
                     }
-                    script {
-                        node {
-                            cleanWs() // ensure workspace cleanup always has a node context
-                        }
-                    }
+                    cleanWs()
                 }
             }
         }

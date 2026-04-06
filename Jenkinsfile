@@ -1,17 +1,50 @@
 pipeline {
     agent none
 
+    parameters {
+        string(
+                name: 'BASE_URL',
+                defaultValue: 'https://fakestoreapi.com',
+                description: 'Target API base URL'
+        )
+        booleanParam(
+                name: 'SEND_NOTIFICATIONS',
+                defaultValue: true,
+                description: 'Send Slack + email notifications'
+        )
+    }
+
     environment {
-        EMAIL_TO = 'you@example.com'   // <-- replace with your email
-        BASE_URL  = 'https://fakestoreapi.com'
+        BASE_URL = "${params.BASE_URL ?: 'https://fakestoreapi.com'}"
+        EMAIL_TO = credentials('QA_EMAIL_RECIPIENT')
+    }
+
+    options {
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+        disableConcurrentBuilds()
+        timeout(time: 20, unit: 'MINUTES')
+        timestamps()
+        ansiColor('xterm')
+    }
+
+    triggers {
+        githubPush()
+        cron('H 2 * * *')
     }
 
     stages {
+
         stage('Checkout') {
             agent any
             steps {
-                checkout scm
-                echo "Checked out branch ${env.BRANCH_NAME}"
+                checkout scm: [$class: 'GitSCM', branches: [[name: 'main']],
+                               userRemoteConfigs: [[url: 'https://github.com/RolandBissah10/CI-CD-With-Jenkins.git']]]
+                script {
+                    env.GIT_AUTHOR = isUnix() ?
+                            sh(script: 'git log -1 --pretty=%an', returnStdout: true).trim() :
+                            bat(script: 'git log -1 --pretty=%an', returnStdout: true).trim()
+                }
+                echo "Branch: ${env.BRANCH_NAME ?: 'main'} | Author: ${env.GIT_AUTHOR}"
             }
         }
 
@@ -19,56 +52,119 @@ pipeline {
             agent any
             steps {
                 script {
-                    // Run Maven in Docker to ensure consistent environment
-                    sh """
-                        docker run --rm -v \$(pwd):/app -w /app maven:3.9.12-eclipse-temurin-17 \
-                        mvn clean test -B -DBASE_URL=${BASE_URL}
-                    """
+                    def mvnHome = tool name: 'maven3', type: 'maven'
+                    withEnv(["PATH+MAVEN=${mvnHome}/bin"]) {
+                        if (isUnix()) {
+                            sh "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                        } else {
+                            bat "mvn clean test -B -DBASE_URL=${env.BASE_URL}"
+                        }
+                    }
                 }
             }
             post {
                 always {
                     script {
-                        // Capture JUnit test results
-                        def testResults = junit '**/target/surefire-reports/*.xml'
-                        env.TEST_TOTAL   = "${testResults.totalCount}"
-                        env.TEST_PASSED  = "${testResults.passCount}"
-                        env.TEST_FAILED  = "${testResults.failCount}"
-                        env.TEST_SKIPPED = "${testResults.skipCount}"
-
-                        echo "Total tests: ${env.TEST_TOTAL}, Passed: ${env.TEST_PASSED}, Failed: ${env.TEST_FAILED}, Skipped: ${env.TEST_SKIPPED}"
-
-                        // Generate Allure report if results exist
-                        if (fileExists('target/allure-results')) {
-                            allure includeProperties: false, jdk: '', results: [[path: 'target/allure-results']]
-                        } else {
-                            echo "No Allure results found."
+                        if (isUnix()) {
+                            sh '''
+                            if [ -d allure-results ]; then
+                                mkdir -p target/allure-results
+                                cp -r allure-results/* target/allure-results/
+                            fi
+                            chmod -R 777 ${WORKSPACE}
+                            '''
                         }
                     }
+                    stash name: 'results', includes: 'target/allure-results/**, target/surefire-reports/**'
                 }
             }
         }
-    }
 
-    post {
-        always {
-            script {
-                def buildStatus = currentBuild.currentResult
-                echo "Sending notification: Build ${buildStatus}"
+        stage('Reports') {
+            agent any
+            steps {
+                script {
+                    if (isUnix()) {
+                        sh 'rm -rf ${WORKSPACE}/* ${WORKSPACE}/.[!.]* 2>/dev/null || true'
+                    }
+                }
 
-                mail to: "${EMAIL_TO}",
-                        subject: "Jenkins Build: ${currentBuild.fullDisplayName} - ${buildStatus}",
-                        body: """Build Details:
-Job: ${env.JOB_NAME}
-Build: ${env.BUILD_NUMBER}
-Status: ${buildStatus}
-Branch: ${env.BRANCH_NAME}
-Total Tests: ${env.TEST_TOTAL ?: 'N/A'}
-Passed: ${env.TEST_PASSED ?: 'N/A'}
-Failed: ${env.TEST_FAILED ?: 'N/A'}
-Skipped: ${env.TEST_SKIPPED ?: 'N/A'}
+                unstash 'results'
 
-Check console output at ${env.BUILD_URL}"""
+                allure results: [[path: 'target/allure-results']]
+
+                publishHTML([
+                        allowMissing:          false,
+                        alwaysLinkToLastBuild: true,
+                        keepAll:               true,
+                        reportDir:             'target/surefire-reports',
+                        reportFiles:           'index.html',
+                        reportName:            'API Test Reports'
+                ])
+
+                archiveArtifacts(
+                        artifacts: 'target/surefire-reports/**/*.xml, target/allure-report/**',
+                        allowEmptyArchive: true
+                )
+
+                script {
+                    def testResults = junit '**/target/surefire-reports/*.xml'
+                    env.TEST_TOTAL   = "${testResults.totalCount}"
+                    env.TEST_PASSED  = "${testResults.passCount}"
+                    env.TEST_FAILED  = "${testResults.failCount}"
+                    env.TEST_SKIPPED = "${testResults.skipCount}"
+
+                    def fileList = sh(returnStdout: true, script: 'ls target/surefire-reports/TEST-*.xml 2>/dev/null || true').trim()
+                    def failedItems = []
+                    if (fileList) {
+                        for (filePath in fileList.split('\n')) {
+                            def content = readFile(filePath.trim())
+                            def matcher = (content =~ /<testcase name="([^"]*)"[^>]*>[\s\S]*?<failure message="([^"]*)"/)
+                            while (matcher.find()) {
+                                failedItems.add(" - ${matcher.group(1)}: ${matcher.group(2)}")
+                            }
+                        }
+                    }
+                    env.TEST_FAILURE_LIST = failedItems ? failedItems.join("\n") : " - None (All tests passed)"
+                }
+            }
+            post {
+                always {
+                    script {
+                        if (params.SEND_NOTIFICATIONS) {
+                            def status = currentBuild.currentResult ?: 'SUCCESS'
+                            def color  = (status == 'SUCCESS') ? 'good' :
+                                    (status == 'UNSTABLE' ? 'warning' : 'danger')
+
+                            def slackMsg = "*FakeStore API Tests — ${status} [Build ${env.BUILD_NUMBER}]*\n" +
+                                    "Branch: *${env.BRANCH_NAME ?: 'main'}* | Author: *${env.GIT_AUTHOR ?: 'N/A'}*\n" +
+                                    "Total: *${env.TEST_TOTAL ?: '0'}* | Passed: *${env.TEST_PASSED ?: '0'}* | Failed: *${env.TEST_FAILED ?: '0'}* | Skipped: *${env.TEST_SKIPPED ?: '0'}*\n\n" +
+                                    "*Failed test(s) and why:*\n${env.TEST_FAILURE_LIST}\n\n" +
+                                    "Build URL: ${env.BUILD_URL}\n" +
+                                    "Allure Report: ${env.BUILD_URL}allure/"
+
+                            slackSend(channel: '#qa-alerts', color: color, message: slackMsg)
+
+                            emailext(
+                                    subject:   "[Jenkins] FakeStore Tests ${status} — Build #${env.BUILD_NUMBER}",
+                                    to:        env.EMAIL_TO,
+                                    mimeType:  'text/html',
+                                    attachLog: true,
+                                    body: "<h3>FakeStore API Tests — ${status}</h3>" +
+                                            "<p><b>Job:</b> ${env.JOB_NAME} #${env.BUILD_NUMBER}</p>" +
+                                            "<p><b>Branch:</b> ${env.BRANCH_NAME ?: 'main'} | <b>Author:</b> ${env.GIT_AUTHOR ?: 'N/A'}</p>" +
+                                            "<p><b>Results:</b> Total: ${env.TEST_TOTAL ?: 0} | Passed: ${env.TEST_PASSED ?: 0} | Failed: ${env.TEST_FAILED ?: 0} | Skipped: ${env.TEST_SKIPPED ?: 0}</p>" +
+                                            "<pre>${env.TEST_FAILURE_LIST}</pre>" +
+                                            "<p><a href='${env.BUILD_URL}allure/'>View Allure Report</a></p>"
+                            )
+                        }
+                    }
+                    script {
+                        node {
+                            cleanWs() // ensure workspace cleanup always has a node context
+                        }
+                    }
+                }
             }
         }
     }

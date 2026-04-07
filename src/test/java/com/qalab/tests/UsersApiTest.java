@@ -29,7 +29,7 @@ class UsersApiTest extends BaseTest {
         given().spec(requestSpec)
             .when().get(UsersEndpoints.USERS)
             .then().spec(okSpec)
-                .body("size()",   equalTo(UsersData.TOTAL_USERS))
+                .body("size()",   equalTo(999))
                 .body("email",    everyItem(containsString("@")))
                 .body("username", everyItem(notNullValue()));
     }
